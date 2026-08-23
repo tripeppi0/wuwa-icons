@@ -1,0 +1,28 @@
+name: Purge jsDelivr cache
+
+# Auto-purges jsDelivr's CDN cache for the data files the WuWa builder reads,
+# right after they change on `main`. Without this, jsDelivr can keep serving
+# the OLD version of manifest.json/gameData.json/characters.json for a while
+# after a push (its own edge cache, independent of the app's caching) — this
+# is what caused the app to still see v1.0.0 ~15 min after pushing v1.0.1.
+#
+# Setup: put this file at .github/workflows/purge-jsdelivr.yml in the
+# tripeppi0/wuwa-icons repo. No secrets/tokens needed — the purge endpoint is
+# public. Uses https://github.com/gacts/purge-jsdelivr-cache.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/**'
+
+jobs:
+  purge-jsdelivr-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gacts/purge-jsdelivr-cache@v1
+        with:
+          url: |
+            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/manifest.json
+            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/gameData.json
+            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/characters.json
