@@ -1,28 +1,71 @@
 name: Purge jsDelivr cache
 
-# Auto-purges jsDelivr's CDN cache for the data files the WuWa builder reads,
-# right after they change on `main`. Without this, jsDelivr can keep serving
-# the OLD version of manifest.json/gameData.json/characters.json for a while
-# after a push (its own edge cache, independent of the app's caching) — this
-# is what caused the app to still see v1.0.0 ~15 min after pushing v1.0.1.
+# ─────────────────────────────────────────────────────────────────────────────
+#  Remplace integralement la version precedente de ce fichier, qui rendait :
+#     ✖ Purging request for the file ".../data/manifest.json" was throttled
+#     Node.js 20 is deprecated … gacts/purge-jsdelivr-cache@v1
 #
-# Setup: put this file at .github/workflows/purge-jsdelivr.yml in the
-# tripeppi0/wuwa-icons repo. No secrets/tokens needed — the purge endpoint is
-# public. Uses https://github.com/gacts/purge-jsdelivr-cache.
+#  Deux changements, et un troisieme qui compte plus que les deux premiers :
+#   1. plus d action Node : c est du `curl` dans un `run:`, donc la
+#      deprecation Node 20 ne s applique plus (gacts/purge-jsdelivr-cache est
+#      archivee depuis le 2 janvier 2025 — il n y aura pas de v2) ;
+#   2. UNE seule URL purgee au lieu de trois : la limite de jsDelivr porte sur
+#      le nombre de requetes, en demander une par fichier a chaque push est
+#      exactement ce qui declenchait le throttle. Et un throttle n est plus une
+#      erreur : le job continue en le disant dans le journal ;
+#   3. la purge n est plus sur le chemin critique. L application lit desormais
+#      son manifest sur raw.githubusercontent.com (max-age=300) et non sur
+#      jsDelivr (s-maxage=43200, 12 h sur leur edge), avec controle de la
+#      version du corps et repli sur raw. Le « ?v= » n y changeait rien :
+#      jsDelivr ignore la query string, seul le CHEMIN entre dans sa cle de
+#      cache. Si cette etape echoue, rate ou disparait, les donnees restent
+#      fraiches.
+#
+#  docs/cdn/purge-jsdelivr.yml (livre a cote sous le nom
+#  purge-jsdelivr-EXPLICATIONS.yml.txt) contient le detail, plus une option
+#  facultative : des URLs immuables par tag git, qui n ont jamais besoin
+#  d etre purgees.
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
     branches: [main]
     paths:
       - 'data/**'
+  workflow_dispatch:
 
 jobs:
-  purge-jsdelivr-cache:
+  purge:
     runs-on: ubuntu-latest
     steps:
-      - uses: gacts/purge-jsdelivr-cache@v1
-        with:
-          url: |
-            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/manifest.json
-            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/gameData.json
-            https://cdn.jsdelivr.net/gh/tripeppi0/wuwa-icons@main/data/characters.json
+      - name: Purge jsDelivr (manifest seul, throttle non bloquant)
+        # Ceinture en plus de la bretelle : le script sort deja 0 dans tous les cas.
+        continue-on-error: true
+        env:
+          DEPOT: tripeppi0/wuwa-icons
+          CHEMIN: data/manifest.json
+        run: |
+          set -u
+          URL="https://purge.jsdelivr.net/gh/${DEPOT}@main/${CHEMIN}"
+          echo "purge -> ${URL}"
+          REP=$(curl -sS --max-time 30 -w '\n%{http_code}' "${URL}" || true)
+          CODE=$(printf '%s' "${REP}" | tail -n1)
+          CORPS=$(printf '%s' "${REP}" | sed '$d')
+          echo "HTTP ${CODE}"
+          echo "${CORPS}"
+          case "${CODE}" in
+            200)
+              if printf '%s' "${CORPS}" | grep -q 'finished'; then
+                echo "::notice::manifest purge du cache jsDelivr"
+              else
+                echo "::notice::purge acceptee, etat non terminal — sans consequence"
+              fi
+              ;;
+            429)
+              echo "::notice::purge limitee par jsDelivr (429) — ignore, les donnees sont lues sur raw.githubusercontent.com"
+              ;;
+            *)
+              echo "::notice::purge indisponible (HTTP ${CODE}) — ignore, sans effet sur la fraicheur des donnees"
+              ;;
+          esac
+          exit 0
